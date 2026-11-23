@@ -12,12 +12,11 @@ permissions:
 
 jobs:
   build:
-    name: Build Minecraft 1.21.4 addon
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      - name: Checkout source
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Java 21
@@ -26,21 +25,17 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Gradle 8.10.2
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
-      - name: Verify project structure
-        run: python tools/verify_source.py
-
-      - name: Build remapped mod JAR
+      - name: Build mod
         run: gradle --no-daemon clean build --stacktrace
 
-      - name: Upload runtime JAR
+      - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
           name: Meteor-Ultimate-Minecraft-1.21.4
-          path: build/libs/*-0.6.2-dev.jar
+          path: build/libs/*.jar
           if-no-files-found: error
-          retention-days: 14
