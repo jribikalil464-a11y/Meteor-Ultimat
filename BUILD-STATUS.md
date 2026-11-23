@@ -21,7 +21,7 @@ name: Set up Java 21
         java-version: '21'
 
       
-name: Set up Gradle
+name: Set up Gradle 8.10.2
       uses: gradle/actions/setup-gradle@v4
       with:
         gradle-version: '8.10.2'
@@ -37,8 +37,3 @@ name: Upload JAR
         name: Meteor-Ultimate-Minecraft-1.21.4
         path: build/libs/*.jar
         if-no-files-found: error
-﻿
-kalil
-kaliljribi
- 
- 
