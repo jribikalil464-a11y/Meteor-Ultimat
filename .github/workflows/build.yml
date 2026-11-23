@@ -29,7 +29,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.10.2'
+          gradle-version: '8.11.1'
 
       - name: Verify project structure
         run: python tools/verify_source.py
@@ -37,10 +37,26 @@ jobs:
       - name: Build mod JAR
         run: gradle --no-daemon clean build --stacktrace
 
+      - name: Prepare remapped JAR
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          mapfile -t jars < <(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | sort)
+          if [ "${#jars[@]}" -ne 1 ]; then
+            echo "Expected exactly one distributable JAR, found ${#jars[@]}:"
+            printf '%s\n' "${jars[@]}"
+            exit 1
+          fi
+          cp "${jars[0]}" release/Meteor-Ultimate-1.21.4.jar
+          sha256sum release/Meteor-Ultimate-1.21.4.jar | tee release/SHA256SUMS.txt
+
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
           name: Meteor-Ultimate-Minecraft-1.21.4
-          path: build/libs/*.jar
+          path: |
+            release/Meteor-Ultimate-1.21.4.jar
+            release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
