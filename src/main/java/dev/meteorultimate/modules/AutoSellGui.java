@@ -6,6 +6,7 @@ import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.component.DataComponentTypes;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.screen.GenericContainerScreenHandler;
@@ -333,7 +334,8 @@ public class AutoSellGui extends Module {
     }
 
     private boolean isProtectedStack(ItemStack stack) {
-        if (protectCustomItems.get() && stack.hasCustomName()) return true;
+        // Minecraft 1.20.5+ stores custom names as a data component, not NBT.
+        if (protectCustomItems.get() && stack.contains(DataComponentTypes.CUSTOM_NAME)) return true;
         if (protectDamagedItems.get() && stack.isDamageable() && stack.getDamage() > 0) return true;
         return false;
     }
@@ -397,4 +399,4 @@ public class AutoSellGui extends Module {
         expectedSourceCount = 0;
         movedSlots = 0;
     }
-}
+                }
