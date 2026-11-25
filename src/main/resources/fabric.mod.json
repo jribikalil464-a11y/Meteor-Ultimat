@@ -2,6 +2,9 @@
   "schemaVersion": 1,
   "id": "meteor_ultimate",
   "version": "${version}",
+  "authors": [
+  "Meteor Ultimate Team"
+],
   "name": "Meteor Ultimate",
   "description": "Lightweight Meteor addon for Minecraft 1.21.4: guarded selling, loaded-world exploration, survival and inventory warnings, resource counting, coordinates, waypoints and session statistics.",
   "environment": "client",
