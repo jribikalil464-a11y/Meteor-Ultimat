@@ -1,0 +1,644 @@
+package dev.meteorultimate.modules;
+
+import dev.meteorultimate.MeteorUltimate;
+import meteordevelopment.meteorclient.events.game.GameLeftEvent;
+import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.settings.*;
+import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.orbit.EventHandler;
+import net.minecraft.block.ShulkerBoxBlock;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.component.DataComponentTypes;
+import net.minecraft.item.BlockItem;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
+import net.minecraft.screen.GenericContainerScreenHandler;
+import net.minecraft.screen.ScreenHandler;
+import net.minecraft.screen.slot.SlotActionType;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class AutoSellGui extends Module {
+    private static final String NOT_LISTED = "not in sale list";
+
+    // Rare or high-value items that are protected by default (toggle: protect-valuable-items).
+    private static final Set<Item> VALUABLE_ITEMS = Set.of(
+        Items.ELYTRA, Items.TOTEM_OF_UNDYING, Items.ENCHANTED_GOLDEN_APPLE, Items.NETHER_STAR,
+        Items.BEACON, Items.DRAGON_EGG, Items.TRIDENT, Items.MACE, Items.HEAVY_CORE,
+        Items.NETHERITE_HELMET, Items.NETHERITE_CHESTPLATE, Items.NETHERITE_LEGGINGS, Items.NETHERITE_BOOTS,
+        Items.NETHERITE_SWORD, Items.NETHERITE_PICKAXE, Items.NETHERITE_AXE, Items.NETHERITE_SHOVEL, Items.NETHERITE_HOE
+    );
+
+    private final SettingGroup sgGeneral = settings.getDefaultGroup();
+    private final SettingGroup sgSafety = settings.createGroup("Protection");
+    private final SettingGroup sgRepeat = settings.createGroup("Repeat");
+    private final SettingGroup sgTracking = settings.createGroup("Tracking");
+
+    public enum Mode { Preview, Manual, Auto }
+
+    private final Setting<Mode> mode = sgGeneral.add(new EnumSetting.Builder<Mode>()
+        .name("mode")
+        .description("Preview: only report what would be sold. Manual: fill the menu and stop so you submit it yourself. Auto: fill the menu and close it to submit.")
+        .defaultValue(Mode.Preview)
+        .build()
+    );
+
+    private final Setting<String> guiTitle = sgGeneral.add(new StringSetting.Builder()
+        .name("gui-title")
+        .description("The exact title of the server sell menu.")
+        .defaultValue("Sell GUI")
+        .build()
+    );
+
+    private final Setting<Integer> containerRows = sgGeneral.add(new IntSetting.Builder()
+        .name("container-rows")
+        .description("Number of rows in the sell menu shown in the supplied screenshot.")
+        .defaultValue(6)
+        .range(1, 6)
+        .sliderRange(1, 6)
+        .build()
+    );
+
+    private final Setting<List<Item>> allowedItems = sgGeneral.add(new ItemListSetting.Builder()
+        .name("items-to-sell")
+        .description("Only these item types may be moved into the sell menu. Empty means sell nothing.")
+        .defaultValue()
+        .build()
+    );
+
+    private final Setting<Integer> minStackCount = sgGeneral.add(new IntSetting.Builder()
+        .name("minimum-stack-count")
+        .description("Only sell stacks with at least this many items.")
+        .defaultValue(1).range(1, 64).sliderRange(1, 64).build()
+    );
+
+    private final Setting<Integer> maxSellSlots = sgGeneral.add(new IntSetting.Builder()
+        .name("maximum-sell-slots")
+        .description("Maximum number of GUI slots to fill in one sale batch.")
+        .defaultValue(54).range(1, 54).sliderRange(1, 54).build()
+    );
+
+    private final Setting<Integer> clickDelay = sgGeneral.add(new IntSetting.Builder()
+        .name("click-delay")
+        .description("Ticks to wait between inventory clicks for server synchronization.")
+        .defaultValue(4)
+        .range(2, 10)
+        .sliderRange(2, 10)
+        .build()
+    );
+
+    private final Setting<List<Item>> blockedItems = sgSafety.add(new ItemListSetting.Builder()
+        .name("never-sell")
+        .description("Items in this list are never moved, even if they are also in the sale list.")
+        .defaultValue()
+        .build()
+    );
+
+    private final Setting<Boolean> protectHotbar = sgSafety.add(new BoolSetting.Builder()
+        .name("protect-hotbar")
+        .description("Never move items from the player's hotbar.")
+        .defaultValue(true).build()
+    );
+
+    private final Setting<Boolean> protectValuables = sgSafety.add(new BoolSetting.Builder()
+        .name("protect-valuable-items")
+        .description("Never move rare items such as elytra, totems, netherite gear, beacons and nether stars.")
+        .defaultValue(true).build()
+    );
+
+    private final Setting<Boolean> protectCustomItems = sgSafety.add(new BoolSetting.Builder()
+        .name("protect-custom-named-items")
+        .description("Never move items with a custom display name.")
+        .defaultValue(true).build()
+    );
+
+    private final Setting<Boolean> protectEnchanted = sgSafety.add(new BoolSetting.Builder()
+        .name("protect-enchanted-items")
+        .description("Never move enchanted items or enchanted books.")
+        .defaultValue(true).build()
+    );
+
+    private final Setting<Boolean> protectLore = sgSafety.add(new BoolSetting.Builder()
+        .name("protect-lore-items")
+        .description("Never move items that have lore text. Turn this off if the server adds lore to normal items.")
+        .defaultValue(true).build()
+    );
+
+    private final Setting<Boolean> protectServerItems = sgSafety.add(new BoolSetting.Builder()
+        .name("protect-server-custom-items")
+        .description("Never move items that carry server custom data or a custom model. Turn this off if the server tags normal items.")
+        .defaultValue(true).build()
+    );
+
+    private final Setting<Boolean> protectDamagedItems = sgSafety.add(new BoolSetting.Builder()
+        .name("protect-damaged-items")
+        .description("Never move damaged items.")
+        .defaultValue(true).build()
+    );
+
+    private final Setting<Boolean> requireEmptyMenu = sgSafety.add(new BoolSetting.Builder()
+        .name("require-empty-menu")
+        .description("Refuse to start a batch if the Sell GUI already contains items, because closing it would sell them too. Turn this off if the menu has decorative filler items.")
+        .defaultValue(true).build()
+    );
+
+    private final Setting<Boolean> repeat = sgRepeat.add(new BoolSetting.Builder()
+        .name("repeat")
+        .description("Reopen the sell menu periodically (Auto mode only). Requires the server's actual open-menu command.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<String> openCommand = sgRepeat.add(new StringSetting.Builder()
+        .name("open-command")
+        .description("Server command that opens Sell GUI, without the leading slash. Leave blank until verified.")
+        .defaultValue("")
+        .build()
+    );
+
+    private final Setting<Integer> intervalSeconds = sgRepeat.add(new IntSetting.Builder()
+        .name("interval-seconds")
+        .description("Delay between completed sell cycles.")
+        .defaultValue(60)
+        .range(15, 3600)
+        .sliderRange(15, 300)
+        .build()
+    );
+
+    private final Setting<Integer> maxCycles = sgRepeat.add(new IntSetting.Builder()
+        .name("max-cycles")
+        .description("Stop automatically after this many cycles in repeat mode. 0 means no limit.")
+        .defaultValue(20)
+        .range(0, 10000)
+        .sliderRange(0, 100)
+        .build()
+    );
+
+    private final Setting<Boolean> showCycleLog = sgTracking.add(new BoolSetting.Builder()
+        .name("cycle-log")
+        .description("Show what was placed in the menu after each batch; this is not server-confirmed earnings.")
+        .defaultValue(true).build()
+    );
+
+    private final Setting<Boolean> balanceReminder = sgTracking.add(new BoolSetting.Builder()
+        .name("balance-reminder")
+        .description("Remind you to verify your balance after a sale batch.")
+        .defaultValue(false).build()
+    );
+
+    private enum Stage { IDLE, PICKED_UP, PLACE_PENDING, WAITING_FOR_REOPEN }
+
+    private Stage stage = Stage.IDLE;
+    private int waitTicks;
+    private int sourceSlot = -1;
+    private int destinationSlot = -1;
+    private int expectedSourceCount;
+    private Item expectedItem;
+    private String expectedName = "";
+    private int movedSlots;
+    private int cyclesDone;
+    private int totalItemsPlaced;
+    private long reopenAtTick;
+    private long guiDeadlineTick;
+    private long ticks;
+    private boolean quietStop;
+    private final Map<String, Integer> batchLog = new LinkedHashMap<>();
+
+    public AutoSellGui() {
+        super(MeteorUltimate.CATEGORY, "auto-sell-gui",
+            "Moves only selected items into the recognized Sell GUI. Starts in preview mode; protection comes before speed.");
+    }
+
+    @Override
+    public void onActivate() {
+        resetCycle();
+        ticks = 0;
+        reopenAtTick = 0;
+        guiDeadlineTick = 0;
+        cyclesDone = 0;
+        totalItemsPlaced = 0;
+        quietStop = false;
+        batchLog.clear();
+
+        for (Item item : allowedItems.get()) {
+            if (blockedItems.get().contains(item)) {
+                warning("An item is in both the allowlist and denylist; denylist takes priority.");
+                break;
+            }
+        }
+        if (repeat.get() && mode.get() != Mode.Auto) {
+            warning("Repeat only works in Auto mode, so it will be ignored.");
+        }
+        if (repeat.get() && mode.get() == Mode.Auto && openCommand.get().isBlank()) {
+            warning("Repeat is on but the open command is blank, so the menu will not be reopened.");
+        }
+    }
+
+    @Override
+    public void onDeactivate() {
+        if (!quietStop && mc.player != null && showCycleLog.get() && totalItemsPlaced > 0) {
+            info("Session total: " + totalItemsPlaced + " items placed in the Sell GUI. Server confirmation is not verified.");
+        }
+        quietStop = false;
+        resetCycle();
+    }
+
+    @Override
+    public String getInfoString() {
+        return mode.get().name();
+    }
+
+    @EventHandler
+    private void onGameLeft(GameLeftEvent event) {
+        // Never carry a running sell cycle over to another server or world.
+        if (!isActive()) return;
+        quietStop = true;
+        toggle();
+    }
+
+    @EventHandler
+    private void onTick(TickEvent.Post event) {
+        ticks++;
+
+        if (mc.player == null || mc.world == null || mc.interactionManager == null) return;
+
+        Screen screen = mc.currentScreen;
+        if (screen == null) {
+            handleClosedScreen();
+            return;
+        }
+
+        ScreenHandler handler = mc.player.currentScreenHandler;
+
+        if (!isSellScreen(screen, handler)) {
+            // Never interact with an unrelated menu.
+            if (stage == Stage.PICKED_UP || stage == Stage.PLACE_PENDING) {
+                error("Unexpected screen detected. Auto Sell stopped for safety.");
+                toggle();
+            } else if (stage == Stage.WAITING_FOR_REOPEN) {
+                checkReopenDeadline();
+            }
+            return;
+        }
+
+        int containerSlots = containerRows.get() * 9;
+
+        if (stage == Stage.WAITING_FOR_REOPEN) {
+            stage = Stage.IDLE;
+            guiDeadlineTick = 0;
+        }
+
+        if (waitTicks > 0) {
+            waitTicks--;
+            return;
+        }
+
+        if (stage == Stage.PICKED_UP) {
+            ItemStack held = handler.getCursorStack();
+            if (held.isEmpty()) {
+                abort("The selected stack was not picked up. Stopping without closing the menu.");
+                return;
+            }
+            if (held.getItem() != expectedItem || held.getCount() != expectedSourceCount) {
+                abort("The item on the cursor is not the one that was selected. Stopping to avoid mistakes.");
+                return;
+            }
+            mc.interactionManager.clickSlot(handler.syncId, destinationSlot, 0,
+                SlotActionType.PICKUP, mc.player);
+            stage = Stage.PLACE_PENDING;
+            waitTicks = clickDelay.get();
+            return;
+        }
+
+        if (stage == Stage.PLACE_PENDING) {
+            if (!handler.getCursorStack().isEmpty()) {
+                abort("The server did not accept the placement. Stopping to avoid losing items.");
+                return;
+            }
+
+            ItemStack source = handler.getSlot(sourceSlot).getStack();
+            if (source.getCount() >= expectedSourceCount) {
+                abort("Inventory did not update after the click. Stopping for safety.");
+                return;
+            }
+
+            ItemStack placed = handler.getSlot(destinationSlot).getStack();
+            if (placed.isEmpty() || placed.getItem() != expectedItem) {
+                abort("The item was not found in the sell menu after placement. Stopping for safety.");
+                return;
+            }
+
+            movedSlots++;
+            totalItemsPlaced += expectedSourceCount;
+            batchLog.merge(expectedName, expectedSourceCount, Integer::sum);
+            stage = Stage.IDLE;
+            sourceSlot = -1;
+            destinationSlot = -1;
+            if (movedSlots >= maxSellSlots.get()) finishBatch();
+            return;
+        }
+
+        if (allowedItems.get().isEmpty()) {
+            info("No sale items selected. Add items to 'Items to sell' first.");
+            toggle();
+            return;
+        }
+
+        if (mode.get() == Mode.Preview) {
+            runPreview(handler, containerSlots);
+            toggle();
+            return;
+        }
+
+        if (movedSlots == 0 && requireEmptyMenu.get()) {
+            int filled = countFilledContainerSlots(handler, containerSlots);
+            if (filled > 0) {
+                error("The Sell GUI already contains " + filled
+                    + " filled slots. Empty it first, or turn off 'require-empty-menu' if they are decorative.");
+                toggle();
+                return;
+            }
+        }
+
+        int src = findEligiblePlayerSlot(handler, containerSlots);
+        if (src >= 0) {
+            if (movedSlots >= maxSellSlots.get()) {
+                finishBatch();
+                return;
+            }
+            if (!handler.getCursorStack().isEmpty()) {
+                abort("Your cursor is holding an item. Put it away first so nothing gets swapped.");
+                return;
+            }
+
+            ItemStack stack = handler.getSlot(src).getStack();
+            int dst = findEmptyContainerSlot(handler, containerSlots, stack);
+            if (dst < 0) {
+                if (movedSlots > 0) {
+                    // Menu is full: submit only the existing batch.
+                    finishBatch();
+                } else {
+                    info("The Sell GUI has no free slot. Nothing was changed.");
+                    toggle();
+                }
+                return;
+            }
+
+            sourceSlot = src;
+            destinationSlot = dst;
+            expectedSourceCount = stack.getCount();
+            expectedItem = stack.getItem();
+            expectedName = stack.getName().getString();
+
+            mc.interactionManager.clickSlot(handler.syncId, src, 0,
+                SlotActionType.PICKUP, mc.player);
+            stage = Stage.PICKED_UP;
+            waitTicks = clickDelay.get();
+            return;
+        }
+
+        // No more eligible items remain in the player inventory.
+        if (movedSlots > 0) {
+            finishBatch();
+        } else {
+            handleNothingToSell();
+        }
+    }
+
+    private boolean isSellScreen(Screen screen, ScreenHandler handler) {
+        if (!(handler instanceof GenericContainerScreenHandler generic)) return false;
+        if (generic.getRows() != containerRows.get()) return false;
+        return screen.getTitle().getString().trim().equalsIgnoreCase(guiTitle.get().trim());
+    }
+
+    /** Returns null when the stack may be sold, otherwise the reason it must stay. */
+    private String ineligibleReason(ItemStack stack, int slot, int containerSlots) {
+        Item item = stack.getItem();
+        if (!allowedItems.get().contains(item)) return NOT_LISTED;
+        if (blockedItems.get().contains(item)) return "in never-sell list";
+        if (protectHotbar.get() && isHotbarSlot(slot, containerSlots)) return "hotbar";
+        if (stack.getCount() < minStackCount.get()) return "below minimum stack size";
+        return protectionReason(stack);
+    }
+
+    private String protectionReason(ItemStack stack) {
+        if (isContainerItem(stack)) return "container or bundle";
+        if (protectValuables.get() && VALUABLE_ITEMS.contains(stack.getItem())) return "valuable item";
+        if (protectCustomItems.get() && stack.contains(DataComponentTypes.CUSTOM_NAME)) return "custom name";
+        if (protectEnchanted.get()
+            && (stack.contains(DataComponentTypes.ENCHANTMENTS) || stack.contains(DataComponentTypes.STORED_ENCHANTMENTS))) {
+            return "enchanted";
+        }
+        if (protectLore.get() && stack.contains(DataComponentTypes.LORE)) return "has lore";
+        if (protectServerItems.get()
+            && (stack.contains(DataComponentTypes.CUSTOM_DATA) || stack.contains(DataComponentTypes.CUSTOM_MODEL_DATA))) {
+            return "server custom item";
+        }
+        if (protectDamagedItems.get() && stack.isDamageable() && stack.getDamage() > 0) return "damaged";
+        return null;
+    }
+
+    private boolean isContainerItem(ItemStack stack) {
+        // Shulker boxes, bundles and anything carrying stored items are always protected.
+        if (stack.contains(DataComponentTypes.CONTAINER) || stack.contains(DataComponentTypes.BUNDLE_CONTENTS)) return true;
+        return stack.getItem() instanceof BlockItem blockItem && blockItem.getBlock() instanceof ShulkerBoxBlock;
+    }
+
+    private int findEligiblePlayerSlot(ScreenHandler handler, int containerSlots) {
+        int end = Math.min(containerSlots + 36, handler.slots.size());
+        for (int i = containerSlots; i < end; i++) {
+            ItemStack stack = handler.getSlot(i).getStack();
+            if (stack.isEmpty()) continue;
+            if (ineligibleReason(stack, i, containerSlots) == null) return i;
+        }
+        return -1;
+    }
+
+    private int countFilledContainerSlots(ScreenHandler handler, int containerSlots) {
+        int count = 0;
+        for (int i = 0; i < containerSlots && i < handler.slots.size(); i++) {
+            if (!handler.getSlot(i).getStack().isEmpty()) count++;
+        }
+        return count;
+    }
+
+    private boolean isHotbarSlot(int slot, int containerSlots) {
+        int hotbarStart = containerSlots + 27;
+        return slot >= hotbarStart && slot < hotbarStart + 9;
+    }
+
+    private int findEmptyContainerSlot(ScreenHandler handler, int containerSlots, ItemStack stack) {
+        for (int i = 0; i < containerSlots && i < handler.slots.size(); i++) {
+            var slot = handler.getSlot(i);
+            // Skip decorative/control slots that reject item insertion.
+            if (slot.getStack().isEmpty() && slot.canInsert(stack) && slot.getMaxItemCount(stack) > 0) return i;
+        }
+        return -1;
+    }
+
+    private void runPreview(ScreenHandler handler, int containerSlots) {
+        int stacks = 0;
+        int items = 0;
+        Map<String, Integer> sellable = new LinkedHashMap<>();
+        Map<String, Integer> skipped = new LinkedHashMap<>();
+
+        int end = Math.min(containerSlots + 36, handler.slots.size());
+        for (int i = containerSlots; i < end; i++) {
+            ItemStack stack = handler.getSlot(i).getStack();
+            if (stack.isEmpty()) continue;
+            String reason = ineligibleReason(stack, i, containerSlots);
+            if (reason == null) {
+                stacks++;
+                items += stack.getCount();
+                sellable.merge(stack.getName().getString(), stack.getCount(), Integer::sum);
+            } else if (!reason.equals(NOT_LISTED)) {
+                skipped.merge(reason, 1, Integer::sum);
+            }
+        }
+
+        info("Preview only: " + stacks + " sellable stacks, " + items + " items. Nothing was moved or sold.");
+        if (!sellable.isEmpty()) sayInfo("Would sell: " + formatCounts(sellable, 10));
+        if (!skipped.isEmpty()) sayInfo("Listed but kept (reason x stacks): " + formatCounts(skipped, 10));
+    }
+
+    private void finishBatch() {
+        if (mc.player == null) return;
+
+        String summary = describeBatch();
+
+        if (mode.get() != Mode.Auto) {
+            if (showCycleLog.get()) sayInfo(summary);
+            info("Menu filled. Auto Sell stopped. Review the Sell GUI and close it yourself to submit the batch.");
+            toggle();
+            return;
+        }
+
+        // This is the normal handled-screen close action (the same server-side close path as ESC).
+        mc.player.closeHandledScreen();
+        cyclesDone++;
+
+        if (showCycleLog.get()) {
+            info("Batch submitted by closing the Sell GUI. Server success is not verified.");
+            sayInfo(summary);
+        }
+        if (balanceReminder.get()) info("Check the server balance or sale confirmation to verify the result.");
+
+        batchLog.clear();
+        resetCycle();
+
+        if (repeat.get() && !openCommand.get().isBlank()) scheduleReopen();
+    }
+
+    private void handleNothingToSell() {
+        if (mc.player != null && mode.get() == Mode.Auto && repeat.get() && !openCommand.get().isBlank()) {
+            info("Nothing eligible this cycle. Closing the menu without changes.");
+            mc.player.closeHandledScreen();
+            cyclesDone++;
+            resetCycle();
+            scheduleReopen();
+            return;
+        }
+        info("No eligible items found. Sell GUI left open and no items were changed.");
+        toggle();
+    }
+
+    private void scheduleReopen() {
+        if (maxCycles.get() > 0 && cyclesDone >= maxCycles.get()) {
+            info("Reached the maximum number of cycles. Auto Sell stopped.");
+            toggle();
+            return;
+        }
+        stage = Stage.WAITING_FOR_REOPEN;
+        reopenAtTick = ticks + intervalSeconds.get() * 20L;
+        guiDeadlineTick = 0;
+    }
+
+    private void handleClosedScreen() {
+        if (stage != Stage.WAITING_FOR_REOPEN) return;
+        if (mode.get() != Mode.Auto || !repeat.get() || openCommand.get().isBlank()) {
+            stage = Stage.IDLE;
+            return;
+        }
+
+        if (guiDeadlineTick > 0) {
+            checkReopenDeadline();
+            return;
+        }
+
+        if (ticks >= reopenAtTick) {
+            String command = openCommand.get().trim();
+            if (command.startsWith("/")) command = command.substring(1);
+            if (command.isBlank()) {
+                error("The open command is empty. Auto Sell stopped.");
+                toggle();
+                return;
+            }
+            mc.player.networkHandler.sendChatCommand(command);
+            // Give the server 10 seconds to open the GUI; do not issue repeated commands.
+            guiDeadlineTick = ticks + 200;
+        }
+    }
+
+    private void checkReopenDeadline() {
+        if (guiDeadlineTick > 0 && ticks > guiDeadlineTick) {
+            error("The Sell GUI did not open after the command. Auto Sell stopped.");
+            toggle();
+        }
+    }
+
+    private void abort(String reason) {
+        error(reason);
+        returnCursorItem();
+        toggle();
+    }
+
+    /** If a stack is stuck on the cursor, put it back in the slot it came from. */
+    private void returnCursorItem() {
+        if (mc.player == null || mc.interactionManager == null || mc.currentScreen == null) return;
+        ScreenHandler handler = mc.player.currentScreenHandler;
+        if (handler == null || handler.getCursorStack().isEmpty()) return;
+        if (sourceSlot < 0 || !isSellScreen(mc.currentScreen, handler)) return;
+        if (!handler.getSlot(sourceSlot).getStack().isEmpty()) return;
+        mc.interactionManager.clickSlot(handler.syncId, sourceSlot, 0,
+            SlotActionType.PICKUP, mc.player);
+    }
+
+    private String describeBatch() {
+        int items = 0;
+        for (int count : batchLog.values()) items += count;
+        return "Placed " + items + " items in " + movedSlots + " slots: " + formatCounts(batchLog, 8);
+    }
+
+    private String formatCounts(Map<String, Integer> counts, int limit) {
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+            if (shown == limit) break;
+            if (shown > 0) sb.append(", ");
+            sb.append(entry.getKey()).append(" x").append(entry.getValue());
+            shown++;
+        }
+        if (counts.size() > shown) sb.append(", and ").append(counts.size() - shown).append(" more");
+        return sb.toString();
+    }
+
+    private void sayInfo(String text) {
+        // Pass dynamic text as an argument so item names can never be read as a format string.
+        info("%s", text);
+    }
+
+    private void resetCycle() {
+        stage = Stage.IDLE;
+        waitTicks = 0;
+        sourceSlot = -1;
+        destinationSlot = -1;
+        expectedSourceCount = 0;
+        expectedItem = null;
+        expectedName = "";
+        movedSlots = 0;
+    }
+}
