@@ -2,7 +2,7 @@
 {
   "schemaVersion": 1,
   "id": "meteor_ultimate",
-  "version": "${version}",
+  "version": "1.0.0",.
   "name": "Meteor Ultimate",
   "authors": [
     "Meteor Ultimate Team"
